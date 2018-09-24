@@ -3,8 +3,7 @@ from mxnet.gluon import nn
 from mxnet.gluon.data.vision import datasets, transforms
 import matplotlib.pyplot as plt
 from time import time
-
-#...
+# dfsdf
 
 mnist_train = datasets.FashionMNIST(train=True)
 
@@ -16,7 +15,7 @@ train_data = gluon.data.DataLoader(mnist_train, batch_size=batch_size, shuffle=T
 
 mnist_valid = gluon.data.vision.FashionMNIST(train=False)
 valid_data = gluon.data.DataLoader(mnist_valid.transform_first(transformer), batch_size=batch_size,
-                                  num_workers=4)
+                                   num_workers=4)
 net = nn.Sequential()
 net.add(nn.Conv2D(channels=6, kernel_size=5, activation='relu'),
         nn.MaxPool2D(pool_size=2, strides=2),

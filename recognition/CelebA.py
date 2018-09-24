@@ -1,42 +1,24 @@
-from detection.symbol import faster_rcnn
-from detection.detection import detect_face
-import mxnet as mx
-import cv2
+"""
+Some process about data set CelebA, to generate a pair-wise face training and testing dataset
+"""
+import random
 import os
-import mxnet.ndarray as nd
+import sys
 import numpy as np
-from mxnet.io import DataIter, DataBatch
+import mxnet as mx
 from mxnet.gluon.data import DataLoader, Dataset
 from mxnet.gluon.data.vision import transforms
-import random
+from mxnet.io import DataBatch
+import mxnet.ndarray as nd
+import cv2
+sys.path.append('../')
+from detection.symbol import faster_rcnn
+from detection.detection import detect_face
 
 def get_ctx():
-    return mx.cpu()
+    """ get the current context """
+    return mx.gpu()
 
-"""
-def get_img_map(img_path, prefix=None):
-    img_map = {}
-    reverse_map = {}
-    img_list = []
-    img_path = '../crops'
-    for dirpath, dirnames, filenames in os.walk(img_path):
-        print(dirpath, dirnames, filenames)
-        break
-    return
-
-    text_path = '../CelebA/Anno/identity_CelebA.txt'
-    with open(text_path) as file:
-        for line in file:
-            line_split = line.split()
-            img_name = os.path.join(line_split[1], line_split[0])
-            if os.path.exists(os.path.join(img_path, img_name)):
-                img_list.append(img_name)
-                img_map[img_name] = line_split[1]
-                if line_split[1] not in reverse_map.keys():
-                    reverse_map[line_split[1]] = []
-                reverse_map[line_split[1]].append(img_name)
-    return img_map, reverse_map, img_list
-"""
 def get_img_map(root_dir='../crops'):
     img_map = {}
     reverse_map = {}
@@ -96,12 +78,33 @@ def resize_long(img_np, long_size):
     img_np = cv2.copyMakeBorder(img_np, pad[0], pad[1], pad[2], pad[3],\
                                 cv2.BORDER_CONSTANT, value=(0,0,0))
     return img_np, resize_scale
-def trans_img(img_np):
+def np2nd(img_np):
     img_nd = nd.array(img_np, ctx=get_ctx())
     img_nd = nd.swapaxes(img_nd, 1, 2)
     img_nd = nd.swapaxes(img_nd, 0, 1)
     img_nd = nd.expand_dims(img_nd, 0)
     return img_nd
+
+def resize_pad(img_np, des_size):
+    """resize and padding an image to des_size"""
+    ratio_src = img_np.shape[0] / img_np.shape[1]
+    ratio_des = des_size[0] / des_size[1]
+    if ratio_src > ratio_des:
+        scale = des_size[0] / img_np.shape[0]
+    else:
+        scale = des_size[1] / img_np.shape[1]
+    img_np = cv2.resize(img_np, None, None, fx=scale, fy=scale,\
+                        interpolation=cv2.INTER_LINEAR)
+    if ratio_src > ratio_des:
+        delta = des_size[1]-img_np.shape[1]
+        pad = (0, 0, delta//2, delta-delta//2)
+    else:
+        delta = des_size[0]-img_np.shape[0]
+        pad = (delta//2, delta-delta//2, 0, 0)
+    img_np = cv2.copyMakeBorder(img_np, pad[0], pad[1],\
+                                pad[2], pad[3],\
+                                cv2.BORDER_CONSTANT, value=(0,0,0))
+    return img_np
 
 def stick_boxes(img_np, boxes):
     crops = []
@@ -111,39 +114,61 @@ def stick_boxes(img_np, boxes):
         pt1_y = int(bbox[1])
         pt2_x = int(bbox[2])
         pt2_y = int(bbox[3])
+        bbox_width = pt2_x - pt1_x
+        bbox_height = pt2_y - pt1_y
+        pad_width = int(np.round(bbox_width * 0.1))
+        pad_height = int(np.round(bbox_height * 0.1))
+        pt1_x = max(0, pt1_x - pad_width)
+        pt1_y = max(0, pt1_y - pad_height)
+        pt2_x = min(img_np.shape[1], pt2_x + pad_width)
+        pt2_y = min(img_np.shape[0], pt2_y + pad_height)
+
+        cv2.rectangle(img_np, (pt1_x, pt1_y), (pt2_x, pt2_y),\
+                      (0, 255, 0), 2)
+
         crops.append(img_np[pt1_y:pt2_y, pt1_x:pt2_x])
     return img_np, crops
 
 def crop_faces():
+    """crop all the faces in CelebA data set and store them in ../crops/face_id/img_name.jpg"""
     model_name = 'mxnet-face-fr50'
-    _, arg_params, aux_params = mx.model.\
-            load_checkpoint(model_name, 0)
+    _, arg_params, aux_params = mx.model.load_checkpoint(model_name, 0)
     arg_params, aux_params = chg_ctx(arg_params, aux_params, get_ctx())
     sym = faster_rcnn.faster_rcnn50(num_class=2)
     img_dir = '../CelebA/Img/img_celeba'
+    face_id_dir = '../CelebA/Anno/identity_CelebA.txt'
+
     cnt = 0
     num_multi = 0
     num_fail = 0
-    img_map = get_img_map()
+    # get the map of img_name to face_id
+    img_map = {}
+    with open(face_id_dir) as file:
+        for line in file:
+            splited = line.split()
+            img_map[splited[0]] = splited[1]
+
     for file_name in os.listdir(img_dir):
         file_path = os.path.join(img_dir, file_name)
         img_np = cv2.imread(file_path)
-        img_np, scale = resize_long(img_np, 600)
-        img_nd = trans_img(img_np)
-        boxes = detect_face(get_ctx(), sym, \
-                            arg_params, aux_params, img_nd)
+        # img_np, scale = resize_long(img_np, 600)
+        img_nd = np2nd(img_np)
+        boxes = detect_face(get_ctx(), sym, arg_params, aux_params, img_nd)
         img_np, crops = stick_boxes(img_np, boxes)
+        show_img(crops[0])
+        if cnt == 10:
+            break
         if len(crops) > 1:
             num_multi += 1
         elif len(crops) == 0:
             num_fail += 1
         if len(crops) != 0:
+            crops[0] = resize_pad(crops[0], (120, 100))
             cur_id = img_map[file_name]
             path = '../crops/'+ cur_id
             if not os.path.exists(path):
                 os.makedirs(path)
-            cv2.imwrite("../crops/"+cur_id+'/'+file_name, \
-                        crops[0])
+            cv2.imwrite("../crops/"+cur_id+'/'+file_name, crops[0])
         cnt += 1
         if cnt % 500 == 0:
             print('Already processed: %d' % cnt)
@@ -220,6 +245,7 @@ def get_pair_num_list(cls_size_list, pair_num):
     for i in range(num_cls):
         pair_num_list.append(scale_seg[i+1] - scale_seg[i])
     return pair_num_list
+
 
 def get_img_pair_list():
     img_map, reverse_map, img_list = get_img_map()
@@ -353,7 +379,7 @@ class PairImgDataset(Dataset):
     def _read_img(self, img_name):
         img_np = cv2.imread(os.path.join(self.img_root, img_name))
         img_np = self._resize_pad(img_np)
-        img_nd = nd.array(img_np, ctx=get_ctx())
+        img_nd = nd.array(img_np, ctx=mx.cpu())
         img_nd = nd.swapaxes(img_nd, 1, 2)
         img_nd = nd.swapaxes(img_nd, 0, 1)
         trans = transforms.Normalize(0.13, 0.31)
@@ -364,18 +390,65 @@ class PairImgDataset(Dataset):
         data1 = self._read_img(self.pair_img_list[idx][0])
         data2 = self._read_img(self.pair_img_list[idx][1])
         cls = self.pair_img_list[idx][2]
-        label = nd.array([cls], ctx=get_ctx())
+        label = nd.array([cls], ctx=mx.cpu())
         return (data1, data2, label)
 
-def get_data_loader(batch_size=64, num_workers=8):
+class ClassDataset:
+    """
+    Return a Dataset with item: (img, class_id, img_id)
+    """
+    def __init__(self, img_list, img_root='../crops'):
+        self.img_list = img_list
+        self.img_root = img_root
+    
+    def __getitem__(self, idx):
+        img_np = cv2.imread(os.path.join(self.img_root, self.img_list[idx]))
+        img_nd = nd.array(img_np)
+        img_nd = nd.swapaxes(img_nd, 1, 2)
+        img_nd = nd.swapaxes(img_nd, 0, 1)
+        temp = self.img_list[idx].split('.')[0]
+        class_id = int(temp.split('/')[0])
+        img_id = int(temp.split('/')[1])
+        return img_nd, class_id, img_id
+
+    def __len__(self):
+        return len(self.img_list)
+
+def get_class_data_loader(batch_size=32, num_workers=8):
+    _, reverse_map, img_list = get_img_map()
+    used_data_num = len(img_list) // 10
+    img_list = img_list[:used_data_num]
+    random.shuffle(img_list)
+    dataset = ClassDataset(img_list)
+    data_loader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, \
+                             last_batch='rollover')
+    data_loader.dataset_size = (dataset.__len__(), 3, 120, 100)
+    get_cls_id = lambda img_name: int(img_name.split('/')[0])
+    cls_num = max(map(get_cls_id, img_list))
+
+    data_num = 0
+    cls_size_list = [0]*(cls_num+1)
+    for img_name in img_list:
+        cls_id = int(img_name.split('/')[0])
+        data_id = int(img_name.split('.')[0].split('/')[1])
+        data_num = max(data_num, data_id)
+        cls_size_list[cls_id] += 1
+
+    data_loader.cls_size_list = cls_size_list
+    data_loader.cls_num = cls_num
+    data_loader.data_num = data_num
+    return data_loader
+
+
+def get_pair_data_loader(batch_size=64, num_workers=8):
     pair_list_pos, pair_list_neg = get_img_pair_list()
     pair_list = pair_list_pos
     pair_list.extend(pair_list_neg)
     random.shuffle(pair_list)
     pair_img_dataset = PairImgDataset(pair_list)
-    pair_img_dataloader = DataLoader(pair_img_dataset, batch_size=64, \
-                                     num_workers = num_workers)
+    pair_img_dataloader = DataLoader(pair_img_dataset, batch_size=batch_size, \
+                                     num_workers=num_workers, last_batch='rollover')
     return pair_img_dataloader
 
 if __name__ == '__main__':
-    pass
+    data_loader = get_class_data_loader()

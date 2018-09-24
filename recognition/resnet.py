@@ -258,10 +258,13 @@ class ResNetV1(HybridBlock):
                 self.features.add(nn.MaxPool2D(3, 2, 1))
 
             for i, num_layer in enumerate(layers):
-                stride = 1 if i == 0 else 2
+                # modified by tanmlh
+                # stride = 1 if i == 0 else 2
+                stride = 2 if i == 3 else 1
                 self.features.add(self._make_layer(block, num_layer, channels[i+1],
                                                    stride, i+1, in_channels=channels[i]))
-            self.features.add(nn.GlobalAvgPool2D())
+            # modified by tanmlh
+            # self.features.add(nn.GlobalAvgPool2D())
 
             self.output = nn.Dense(classes, in_units=channels[-1])
 
@@ -275,10 +278,10 @@ class ResNetV1(HybridBlock):
         return layer
 
     def hybrid_forward(self, F, x):
-        x = self.features(x)
-        x = self.output(x)
+        feature = self.features(x)
+        x = self.output(feature)
 
-        return x
+        return x, feature
 
 
 class ResNetV2(HybridBlock):
