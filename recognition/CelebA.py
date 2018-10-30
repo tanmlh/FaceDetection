@@ -4,6 +4,7 @@ Some process about data set CelebA, to generate a pair-wise face training and te
 import random
 import os
 import sys
+import math
 import numpy as np
 import mxnet as mx
 from mxnet.gluon.data import DataLoader, Dataset
@@ -14,6 +15,7 @@ import cv2
 sys.path.append('../')
 from detection.symbol import faster_rcnn
 from detection.detection import detect_face
+import itertools
 
 def get_ctx():
     """ get the current context """
@@ -23,14 +25,20 @@ def get_img_map(root_dir='../crops'):
     img_map = {}
     reverse_map = {}
     img_list = []
+    cls_map = {}
+    cnt = 1
     for sub_dir in os.listdir(root_dir):
+        if cls_map.get(sub_dir) is None:
+            cls_map[sub_dir] = str(cnt)
+            cnt += 1
         for img_name in os.listdir(os.path.join(root_dir, sub_dir)):
             img_path = os.path.join(sub_dir, img_name)
             img_list.append(img_path)
-            img_map[img_path] = sub_dir
-            if sub_dir not in reverse_map.keys():
-                reverse_map[sub_dir] = []
-            reverse_map[sub_dir].append(img_path)
+            img_map[img_path] = cls_map[sub_dir]
+            if cls_map[sub_dir] not in reverse_map.keys():
+                reverse_map[cls_map[sub_dir]] = []
+            reverse_map[cls_map[sub_dir]].append(img_path)
+
     return img_map, reverse_map, img_list
 
 def show_img(img_np):
@@ -398,9 +406,9 @@ class ClassDataset:
     Return a Dataset with item: (img, class_id, img_id)
     """
     def __init__(self, img_list, img_root='../crops'):
-        self.img_list = img_list
         self.img_root = img_root
-    
+        self.img_list = img_list
+
     def __getitem__(self, idx):
         img_np = cv2.imread(os.path.join(self.img_root, self.img_list[idx]))
         img_nd = nd.array(img_np)
@@ -414,10 +422,11 @@ class ClassDataset:
     def __len__(self):
         return len(self.img_list)
 
-def get_class_data_loader(batch_size=32, num_workers=8):
-    _, reverse_map, img_list = get_img_map()
-    used_data_num = len(img_list) // 10
-    img_list = img_list[:used_data_num]
+
+def get_class_data_loader(batch_size=50, num_workers=8):
+    img_map, reverse_map, img_list = get_img_map()
+    # used_data_num = len(img_list) // 100
+    # img_list = img_list[:used_data_num]
     random.shuffle(img_list)
     dataset = ClassDataset(img_list)
     data_loader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, \
@@ -439,6 +448,86 @@ def get_class_data_loader(batch_size=32, num_workers=8):
     data_loader.data_num = data_num
     return data_loader
 
+class EpisodeLoader:
+    def __init__(self, cls_loader, nc, ns, nq):
+        cls_num = len(cls_loader)-1
+        self.cls_num = cls_num
+        cls_seq = itertools.cycle(range(1, cls_num+1))
+        self.cls_loader = cls_loader
+        cls_loader[0] = [0]
+        self.ites = list(map(iter, cls_loader))
+        self.cls_seq = cls_seq
+        self.nc = nc
+        self.ns = ns
+        self.nq = nq
+        self.cls_cnt = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.cls_cnt >= self.cls_num:
+            self.cls_cnt = 0
+            raise StopIteration
+        imgs_support = []
+        imgs_query = []
+        cls_ids_support = []
+        cls_ids_query = []
+        img_ids_support = []
+        img_ids_query = []
+        cnt = 0
+        while cnt < self.nc:
+            cur_cls = next(self.cls_seq)
+            try:
+                img, cls_id, img_id = next(self.ites[cur_cls])
+            except StopIteration:
+                self.ites[cur_cls] = iter(self.cls_loader[cur_cls])
+                continue
+            imgs_support.append(img[0:self.ns])
+            imgs_query.append(img[self.ns:])
+            cls_ids_support.append(cls_id[0:self.ns])
+            cls_ids_query.append(cls_id[self.ns:])
+            img_ids_support.append(img_id[0:self.ns])
+            img_ids_query.append(img_id[self.ns:])
+
+            cnt += 1
+        self.cls_cnt += self.nc
+        support = (nd.concatenate(imgs_support, 0), nd.concatenate(cls_ids_support, 0),
+                   nd.concatenate(img_ids_support, 0))
+        query = (nd.concatenate(imgs_query, 0), nd.concatenate(cls_ids_query, 0),
+                 nd.concatenate(img_ids_query, 0))
+        return nd.concatenate([support[0], query[0]], 0),\
+                nd.concatenate([support[1], query[1]], 0),\
+                nd.concatenate([support[2], query[2]], 0)
+
+    def __len__(self):
+        return math.ceil(self.cls_num / self.nc)
+
+def get_episode_lodaer(nc=10, ns=5, nq=5, num_workers=0):
+    img_map, reverse_map, img_list = get_img_map()
+    cls_num = len(reverse_map)
+    cls_seq = list(range(1, cls_num+1))
+    random.shuffle(cls_seq)
+    data_loader = [0] * (cls_num+1)
+    for i in range(1, cls_num+1):
+        if(reverse_map.get(str(i)) == None):
+            continue
+        sample_num = len(reverse_map[str(i)])
+        train_num = min(sample_num * 4 // 5, sample_num-1)
+        dataset = ClassDataset(reverse_map[str(i)][0:train_num])
+        data_loader[i] = DataLoader(dataset, batch_size=ns+nq, num_workers=0,
+                                    last_batch='rollover', shuffle=True)
+    train_loader = EpisodeLoader(data_loader, nc, ns, nq)
+
+    for i in range(1, cls_num+1):
+        sample_num = len(reverse_map[str(i)])
+        train_num = min(sample_num * 4 // 5, sample_num-1)
+        dataset = ClassDataset(reverse_map[str(i)][train_num:])
+        data_loader[i] = DataLoader(dataset, batch_size=ns+nq, num_workers=0,
+                                    last_batch='rollover', shuffle=True)
+    test_loader = EpisodeLoader(data_loader, nc, ns, nq)
+
+    return train_loader, test_loader
 
 def get_pair_data_loader(batch_size=64, num_workers=8):
     pair_list_pos, pair_list_neg = get_img_pair_list()
@@ -451,4 +540,5 @@ def get_pair_data_loader(batch_size=64, num_workers=8):
     return pair_img_dataloader
 
 if __name__ == '__main__':
-    data_loader = get_class_data_loader()
+    train_loader, test_loader = get_episode_lodaer()
+    temp = iter(train_loader)

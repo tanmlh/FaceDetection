@@ -35,7 +35,7 @@ def compress_video(video_dir, des_dir, ctx_id=0, video_id=0):
     video_capture.get(cv2.CAP_PROP_FRAME_COUNT) 
     num_frame = 0
 
-    model_name = 'mxnet-face-fr50'
+    model_name = '../detection/mxnet-face-fr50'
     _, arg_params, aux_params = mx.model.load_checkpoint(model_name, 0)
     arg_params, aux_params = F.chg_ctx(arg_params, aux_params, ctx)
     sym = faster_rcnn.faster_rcnn50(num_class=2)

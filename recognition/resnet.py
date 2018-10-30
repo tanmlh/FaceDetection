@@ -258,9 +258,7 @@ class ResNetV1(HybridBlock):
                 self.features.add(nn.MaxPool2D(3, 2, 1))
 
             for i, num_layer in enumerate(layers):
-                # modified by tanmlh
-                # stride = 1 if i == 0 else 2
-                stride = 2 if i == 3 else 1
+                stride = 1 if i == 0 else 2
                 self.features.add(self._make_layer(block, num_layer, channels[i+1],
                                                    stride, i+1, in_channels=channels[i]))
             # modified by tanmlh
