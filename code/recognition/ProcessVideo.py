@@ -115,7 +115,7 @@ if __name__ == '__main__':
     ctx = mx.gpu(gpu_id)
     video_path = '../../dataset/OptFace/CompressedVideo'
     detector = Detector('../../model/faster_rcnn/mxnet-face-fr50', ctx)
-    for video_file in os.listdir(video_path):
+    for video_file in os.listdir(video_path)[2:3]:
         video_dir = os.path.join(video_path, video_file)
         video_capture = cv2.VideoCapture(video_dir)
         fps = video_capture.get(cv2.CAP_PROP_FPS)

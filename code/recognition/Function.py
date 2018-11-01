@@ -231,7 +231,7 @@ class episodeloader:
         return math.ceil(self.cls_num / self.nc)
 
 def get_episode_lodaer(img_root, img_size = (120, 100), nc=10, ns=5, nq=5, num_workers=0,
-                       split=true):
+                       split=True):
     img_map, reverse_map, img_list, cls_map, _ = get_img_map(img_root)
     cls_num = len(reverse_map)
     cls_seq = list(range(1, cls_num+1))
