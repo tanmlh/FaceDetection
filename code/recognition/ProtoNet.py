@@ -5,7 +5,6 @@ from mxnet.gluon import nn
 from mxnet import autograd, init
 import resnet
 import numpy as np
-import CelebA
 import pickle
 import math
 

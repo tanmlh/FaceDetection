@@ -8,7 +8,7 @@ from .symbol.config import config
 from .symbol.processing import bbox_pred, clip_boxes, nms
 import sys
 sys.path.append('../')
-from recognition import Function
+from common import Function
 
 def ch_dev(arg_params, aux_params, ctx):
     new_args = dict()
@@ -24,7 +24,7 @@ class Detector:
     Faster RCNN Detector, give model path and context to initialize it
     """
     def __init__(self, model_path, ctx, epoch=0):
-        config.TEST.RPN_MIN_SIZE = 30
+        config.TEST.RPN_MIN_SIZE = 50
         _, arg_params, aux_params = mx.model.load_checkpoint(model_path, epoch)
         self.arg_params, self.aux_params = ch_dev(arg_params, aux_params, ctx)
         self.sym = faster_rcnn50(num_class=2)
